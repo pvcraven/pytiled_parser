@@ -95,13 +95,18 @@ class Image:
     This module does not support embedded data in image elements.
 
     Attributes:
-        source (Optional[str]): The reference to the tileset image file. Note that this is a relative path compared to FIXME
+        source (Optional[str]): The reference to the tileset image file. Note that this is
+                                a relative path compared to FIXME
+        start_x: Upper-left corner x of image from source. Usually 0 unless pulling
+                 from a sprite sheet.
+        start_y: Upper-left corner y of image from source. Usually 0 unless pulling
+                 from a sprite sheet.
         trans (Optional[Color]): Defines a specific color that is treated as transparent.
-        width (Optional[str]): The image width in pixels (optional, used for tile index correction when the image changes).
-        height (Optional[str]): The image height in pixels (optional).
+        size: Size
     """
 
     source: str
+    start_point: OrderedPair = OrderedPair(0, 0)
     size: Optional[Size] = None
     trans: Optional[str] = None
 
