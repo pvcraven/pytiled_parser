@@ -4,7 +4,7 @@ from os import path
 from setuptools import setup  # type: ignore
 
 BUILD = 0
-VERSION = "0.9.1"
+VERSION = "0.9.2"
 RELEASE = VERSION
 
 if __name__ == "__main__":
