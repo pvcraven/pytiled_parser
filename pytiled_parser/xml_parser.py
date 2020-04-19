@@ -4,8 +4,7 @@ import base64
 import functools
 import gzip
 import re
-import importlib
-from xml.etree import ElementTree
+import xml.etree.ElementTree as etree
 import zlib
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
@@ -16,44 +15,31 @@ from pytiled_parser.utilities import parse_color
 
 def _decode_base64_data(
     data_text: str, layer_width: int, compression: Optional[str] = None
-) -> List[List[int]]:
+) -> objects.TileLayerGrid:
     """Decode base64 data.
 
     Args:
-        data_text (str): Data to be decoded.
-        layer_width (int): Width of each layer in tiles.
-        compression (Optional[str]): The type of compression for the data.
+        data_text: Data to be decoded.
+        layer_width: Width of each layer in tiles.
+        compression: The type of compression for the data.
 
     Raises:
         ValueError: If compression type is unsupported.
 
     Returns:
-        :List[List[int]]: Tile grid.
+        objects.TileLayerGrid: Tile grid.
     """
-    tile_grid: List[List[int]] = [[]]
+    tile_grid: objects.TileLayerGrid = [[]]
 
     unencoded_data = base64.b64decode(data_text)
     if compression == "zlib":
         unzipped_data = zlib.decompress(unencoded_data)
     elif compression == "gzip":
         unzipped_data = gzip.decompress(unencoded_data)
-    elif compression == "zstd":
-        modulename = 'zstandard'
-        my_loader = importlib.find_loader(modulename)
-        found = my_loader is not None
-        if not found:
-            raise ValueError("Can't load 'zstd' compressed map without the 'zstandard' "
-                             "library available. Either install 'zstandard' or go to "
-                             "Map Properties and change Tile Layer Format to "
-                             "Base64, Base64 gzip, or Base64.")
-        else:
-            import zstandard
-            dctx = zstandard.ZstdDecompressor()
-            unzipped_data = dctx.decompress(unencoded_data)
     elif compression is None:
         unzipped_data = unencoded_data
     else:
-        raise ValueError(f"Unsupported compression type '{compression}'.")
+        raise ValueError(f"Unsupported compression type: '{compression}'.")
 
     # Turn bytes into 4-byte integers
     byte_count = 0
@@ -76,14 +62,14 @@ def _decode_base64_data(
     return tile_grid
 
 
-def _decode_csv_data(data_text: str) -> List[List[int]]:
+def _decode_csv_data(data_text: str) -> objects.TileLayerGrid:
     """Decodes csv encoded layer data.
 
     Args:
-        data_text (str): Data to be decoded.
+        data_text: Data to be decoded.
 
     Returns:
-        List[List[int]]: Tile grid.
+        objects.TileLayerGrid: Tile grid.
     """
     tile_grid = []
     lines: List[str] = data_text.split("\n")
@@ -100,74 +86,60 @@ def _decode_csv_data(data_text: str) -> List[List[int]]:
     return tile_grid
 
 
-def _decode_data(
-    element: ElementTree.Element,
+# I'm not sure if this is the best way to do this
+TileLayerDecoder = Union[
+    Callable[[str], objects.TileLayerGrid],
+    Callable[[str, int, Optional[str]], objects.TileLayerGrid],
+]
+
+
+def _decode_tile_layer_data(
+    element: etree.Element,
     layer_width: int,
     encoding: str,
     compression: Optional[str] = None,
-) -> List[List[int]]:
-    """Decodes data or chunk data.
+) -> objects.TileLayerGrid:
+    """Decodes tile layer data or chunk data.
+
+    See: https://doc.mapeditor.org/en/stable/reference/tmx-map-format/#tmx-data
 
     Args:
-        element (Element): Element to have text decoded.
-        layer_width (int): Number of tiles per column in this layer. Used
-            for determining when to cut off a row when decoding base64
-            encoding layers.
-        encoding (str): Encoding format of the layer data.
-        compression (str): Compression format of the layer data.
+        element: Element to have text decoded.
+        layer_width: Number of tiles per column in this layer. Used for determining
+            when to cut off a row when decoding base64 encoding layers.
+        encoding: Encoding format of the layer data.
+        compression: Compression format of the layer data.
 
     Raises:
         ValueError: Encoding type is not supported.
-        ValueError: Compression is not supported for this encoding type.
-        ValueError: Compression type is not supported
-        AttributeError: No data in element.
 
     Returns:
-        List[List[int]]: Tile grid.
+        objects.TileLayerGrid: Tile grid.
     """
-    # ElementTree.Element.text comes with an appended and a prepended '\n'
-    supported_encodings = ["base64", "csv"]
-    if encoding not in supported_encodings:
-        raise ValueError(f"{encoding} is not a supported encoding")
 
-    supported_compression = [None, "gzip", "zlib", "zstd"]
-    if compression is not None:
-        if encoding != "base64":
-            raise ValueError(f"{encoding} does not support compression")
-        if compression not in supported_compression:
-            raise ValueError(f"Can't load map because "
-                             f"'{compression}' is not a supported compression "
-                             f"type. Go to Map Properties and change Tile Layer "
-                             f"Format to Base64, Base64 gzip, or Base64 zlib.")
-
-    try:
-        data_text: str = element.text  # type: ignore
-    except AttributeError:
-        raise AttributeError(f"{element} lacks layer data.")
+    data_text: str = element.text  # type: ignore
 
     if encoding == "csv":
         return _decode_csv_data(data_text)
+    if encoding == "base64":
+        return _decode_base64_data(data_text, layer_width, compression)
 
-    return _decode_base64_data(data_text, layer_width, compression)
+    raise ValueError(f"{encoding} is not a supported encoding")
 
 
-def _parse_data(element: ElementTree.Element, layer_width: int) -> objects.LayerData:
+def _parse_data(element: etree.Element, layer_width: int) -> objects.LayerData:
     """Parses layer data.
 
     Will parse CSV, base64, gzip-base64, or zlip-base64 encoded data.
 
     Args:
-        element (Element): Data element to parse.
-        layer_width (int): Layer width. Used for base64 decoding.
+        element: Data element to parse.
+        layer_width: Layer width. Used for base64 decoding.
 
     Returns:
         LayerData: Data object containing layer data or chunks of data.
     """
-    try:
-        encoding = element.attrib["encoding"]
-    except KeyError as e:
-        print("The tmx_file must be encoding by csv,. base64, gzip-base64, or zlip-base64")
-        raise e
+    encoding = element.attrib["encoding"]
 
     compression = None
     try:
@@ -184,17 +156,17 @@ def _parse_data(element: ElementTree.Element, layer_width: int) -> objects.Layer
             location = objects.OrderedPair(x, y)
             width = int(chunk_element.attrib["width"])
             height = int(chunk_element.attrib["height"])
-            layer_data = _decode_data(
+            layer_data = _decode_tile_layer_data(
                 chunk_element, layer_width, encoding, compression
             )
             chunks.append(objects.Chunk(location, width, height, layer_data))
         return chunks
 
-    return _decode_data(element, layer_width, encoding, compression)
+    return _decode_tile_layer_data(element, layer_width, encoding, compression)
 
 
 def _parse_layer(
-    layer_element: ElementTree.Element
+    layer_element: etree.Element,
 ) -> Tuple[
     int,
     str,
@@ -256,14 +228,14 @@ def _parse_layer(
     return id_, name, offset, opacity, properties
 
 
-def _parse_tile_layer(element: ElementTree.Element,) -> objects.TileLayer:
+def _parse_tile_layer(element: etree.Element,) -> objects.TileLayer:
     """Parses tile layer element.
 
     Args:
         element: The layer element to be parsed.
 
     Raises:
-        ValueError: Element has no chile data element.
+        ValueError: Element has no child data element.
 
     Returns:
         TileLayer: The tile layer object.
@@ -291,9 +263,7 @@ def _parse_tile_layer(element: ElementTree.Element,) -> objects.TileLayer:
     )
 
 
-def _parse_objects(
-    object_elements: List[ElementTree.Element]
-) -> List[objects.TiledObject]:
+def _parse_objects(object_elements: List[etree.Element]) -> List[objects.TiledObject]:
     """Parses objects found in the 'objectgroup' element.
 
     Args:
@@ -351,20 +321,18 @@ def _parse_objects(
 
         properties_element = object_element.find("./properties")
         if properties_element is not None:
-            tiled_object.properties = _parse_properties_element(
-                properties_element
-            )
+            tiled_object.properties = _parse_properties_element(properties_element)
 
         tiled_objects.append(tiled_object)
 
     return tiled_objects
 
 
-def _parse_object_layer(element: ElementTree.Element,) -> objects.ObjectLayer:
+def _parse_object_layer(element: etree.Element,) -> objects.ObjectLayer:
     """Parse the objectgroup element given.
 
     Args:
-        element (ElementTree.Element): Element to be parsed.
+        element: Element to be parsed.
 
     Returns:
         ObjectLayer: The object layer object.
@@ -397,11 +365,11 @@ def _parse_object_layer(element: ElementTree.Element,) -> objects.ObjectLayer:
     )
 
 
-def _parse_layer_group(element: ElementTree.Element,) -> objects.LayerGroup:
+def _parse_layer_group(element: etree.Element,) -> objects.LayerGroup:
     """Parse the objectgroup element given.
 
     Args:
-        element (ElementTree.Element): Element to be parsed.
+        element: Element to be parsed.
 
     Returns:
         LayerGroup: The layer group object.
@@ -421,13 +389,12 @@ def _parse_layer_group(element: ElementTree.Element,) -> objects.LayerGroup:
 
 
 def _get_layer_parser(
-    layer_tag: str
-) -> Optional[Callable[[ElementTree.Element], objects.Layer]]:
+    layer_tag: str,
+) -> Optional[Callable[[etree.Element], objects.Layer]]:
     """Gets a the parser for the layer type specified.
 
-    Layer tags are 'layer' for a tile layer, 'objectgroup' for an object
-        layer, and 'group' for a layer group. If anything else is passed,
-        returns None.
+    Layer tags are 'layer' for a tile layer, 'objectgroup' for an object layer, and
+        'group' for a layer group. If anything else is passed, returns None.
 
     Args:
         layer_tag: Specifies the layer type to be parsed based on the element
@@ -446,7 +413,7 @@ def _get_layer_parser(
     return None
 
 
-def _get_layers(map_element: ElementTree.Element) -> List[objects.Layer]:
+def _get_layers(map_element: etree.Element) -> List[objects.Layer]:
     """Parse layer type element given.
 
     Retains draw order based on the returned lists index FIXME: confirm
@@ -455,8 +422,7 @@ def _get_layers(map_element: ElementTree.Element) -> List[objects.Layer]:
         map_element: The element containing the layer.
 
     Returns:
-        List[Layer]: A list of the layers, ordered by draw order.
-            FIXME: confirm
+        List[Layer]: A list of the layers, ordered by draw order. FIXME: confirm
     """
     layers: List[objects.Layer] = []
     for element in map_element.findall("./"):
@@ -469,23 +435,29 @@ def _get_layers(map_element: ElementTree.Element) -> List[objects.Layer]:
 
 @functools.lru_cache()
 def _parse_external_tile_set(
-    parent_dir: Path, tile_set_element: ElementTree.Element
+    parent_dir: Path, tile_set_element: etree.Element
 ) -> objects.TileSet:
     """Parses an external tile set.
 
     Caches the results to speed up subsequent maps with identical tilesets.
 
     Args:
-        parent_dir (Path): Directory that TMX is in.
-        tile_set_element (ElementTree.Element): Tile set element.
+        parent_dir: Directory that TMX is in.
+        tile_set_element: Tile set element.
 
     Returns:
         objects.Tileset: The tileset being parsed.
     """
     source = Path(tile_set_element.attrib["source"])
-    tile_set_tree = ElementTree.parse(str(parent_dir / Path(source))).getroot()
+    resolved_path = parent_dir / source
+    tile_set_tree = etree.parse(str(parent_dir / Path(source))).getroot()
 
-    return _parse_tile_set(tile_set_tree)
+    parsed_tile_set = _parse_tile_set(tile_set_tree)
+
+    parsed_tile_set.tsx_file = resolved_path
+    parsed_tile_set.parent_dir = resolved_path.parent
+
+    return parsed_tile_set
 
 
 def _parse_points(point_string: str) -> List[objects.OrderedPair]:
@@ -496,22 +468,19 @@ def _parse_points(point_string: str) -> List[objects.OrderedPair]:
         xys = str_pair.split(",")
         x = float(xys[0])
         y = float(xys[1])
-        points.append(objects.OrderedPair(x, y))
+        points.append((x, y))
 
     return points
 
 
-def _parse_tiles(
-    tile_element_list: List[ElementTree.Element]
-) -> Dict[int, objects.Tile]:
+def _parse_tiles(tile_element_list: List[etree.Element]) -> Dict[int, objects.Tile]:
     """Parse a list of tile elements.
 
     Args:
-        tile_element_list (List[ElementTree.Element]): List of tile elements.
+        tile_element_list: List of tile elements.
 
     Returns:
-        Dict[int, objects.Tile]: Dictionary containing Tile objects by their
-            ID.
+        Dict[int, objects.Tile]: Dictionary containing Tile objects by their ID.
     """
     tiles: Dict[int, objects.Tile] = {}
     for tile_element in tile_element_list:
@@ -579,16 +548,16 @@ def _parse_tiles(
         if objectgroup_element:
             objectgroup = []
             object_list = objectgroup_element.findall("./object")
-            for cur_object in object_list:
-                my_id = cur_object.attrib["id"]
-                my_x = float(cur_object.attrib["x"])
-                my_y = float(cur_object.attrib["y"])
-                if "width" in cur_object.attrib:
-                    my_width = float(cur_object.attrib["width"])
+            for object in object_list:
+                my_id = object.attrib["id"]
+                my_x = float(object.attrib["x"])
+                my_y = float(object.attrib["y"])
+                if "width" in object.attrib:
+                    my_width = float(object.attrib["width"])
                 else:
                     my_width = None
-                if "height" in cur_object.attrib:
-                    my_height = float(cur_object.attrib["height"])
+                if "height" in object.attrib:
+                    my_height = float(object.attrib["height"])
                 else:
                     my_height = None
 
@@ -597,42 +566,48 @@ def _parse_tiles(
 
                 my_object = None
 
-                polygon = cur_object.findall("./polygon")
+                polygon = object.findall("./polygon")
 
                 if polygon and len(polygon) > 0:
                     points = _parse_points(polygon[0].attrib["points"])
-                    my_object = objects.PolygonObject(id_=my_id,
-                                                      location=(my_x, my_y),
-                                                      size=(my_width, my_height),
-                                                      points=points)
+                    my_object = objects.PolygonObject(
+                        id_=my_id,
+                        location=(my_x, my_y),
+                        size=(my_width, my_height),
+                        points=points,
+                    )
 
                 if my_object is None:
-                    polyline = cur_object.findall("./polyline")
+                    polyline = object.findall("./polyline")
 
                     if polyline and len(polyline) > 0:
                         points = _parse_points(polyline[0].attrib["points"])
-                        my_object = objects.PolylineObject(id_=my_id,
-                                                           location=(my_x, my_y),
-                                                           size=(my_width, my_height),
-                                                           points=points)
+                        my_object = objects.PolylineObject(
+                            id_=my_id,
+                            location=(my_x, my_y),
+                            size=(my_width, my_height),
+                            points=points,
+                        )
 
                 if my_object is None:
-                    ellipse = cur_object.findall("./ellipse")
+                    ellipse = object.findall("./ellipse")
 
                     if ellipse and len(ellipse):
-                        my_object = objects.ElipseObject(id_=my_id,
-                                                         location=(my_x, my_y),
-                                                         size=(my_width, my_height))
+                        my_object = objects.ElipseObject(
+                            id_=my_id, location=(my_x, my_y), size=(my_width, my_height)
+                        )
 
                 if my_object is None:
-                    if "template" in cur_object.attrib:
-                        print("Warning, this .tmx file is using an unsupported 'template' attribute. Ignoring.")
+                    if "template" in object.attrib:
+                        print(
+                            "Warning, this .tmx file is using an unsupported 'template' attribute. Ignoring."
+                        )
                         continue
 
                 if my_object is None:
-                    my_object = objects.RectangleObject(id_=my_id,
-                                                        location=(my_x, my_y),
-                                                        size=(my_width, my_height))
+                    my_object = objects.RectangleObject(
+                        id_=my_id, location=(my_x, my_y), size=(my_width, my_height)
+                    )
 
                 objectgroup.append(my_object)
 
@@ -652,17 +627,17 @@ def _parse_tiles(
             image=image,
             properties=properties,
             tileset=None,
-            objectgroup=objectgroup
+            objectgroup=objectgroup,
         )
 
     return tiles
 
 
-def _parse_image_element(image_element: ElementTree.Element) -> objects.Image:
+def _parse_image_element(image_element: etree.Element) -> objects.Image:
     """Parse image element given.
 
     Args:
-        image_element (ElementTree.Element): Image element to be parsed.
+        image_element (etree.Element): Image element to be parsed.
 
     Returns:
         objects.Image: FIXME what is this?
@@ -684,19 +659,18 @@ def _parse_image_element(image_element: ElementTree.Element) -> objects.Image:
     return image
 
 
-def _parse_properties_element(
-    properties_element: ElementTree.Element
-) -> objects.Properties:
+def _parse_properties_element(properties_element: etree.Element) -> objects.Properties:
+    # FIXME: wtf is this pseudo 'attributes' section?
     """Adds Tiled property to Properties dict.
 
     Each property element has a number of attributes:
-        name (str): Name of property.
-        property_type (str): Type of property. Can be string, int, float,
-            bool, color or file. Defaults to string.
-        value (str): The value of the property.
+        name: Name of property.
+        property_type: Type of property. Can be string, int, float, bool, color or
+            file. Defaults to string.
+        value: The value of the property.
 
     Args:
-        properties_element (ElementTree.Element): Element to be parsed.
+        properties_element: Element to be parsed.
 
     Returns:
         objects.Properties: Dict of the property values by property name.
@@ -714,9 +688,7 @@ def _parse_properties_element(
         value = property_element.attrib["value"]
 
         property_types = ["string", "int", "float", "bool", "color", "file"]
-        assert (
-            property_type in property_types
-        ), f"Invalid type for property {name}"
+        assert property_type in property_types, f"Invalid type for property {name}"
 
         if property_type == "int":
             properties[name] = int(value)
@@ -737,11 +709,11 @@ def _parse_properties_element(
     return properties
 
 
-def _parse_tile_set(tile_set_element: ElementTree.Element) -> objects.TileSet:
+def _parse_tile_set(tile_set_element: etree.Element) -> objects.TileSet:
     """Parses a tile set that is embedded into a TMX.
 
     Args:
-        tile_set_element (ElementTree.Element): Element to be parsed.
+        tile_set_element: Element to be parsed.
 
     Returns:
         objects.TileSet: Tile Set from element.
@@ -836,14 +808,12 @@ def _parse_tile_set(tile_set_element: ElementTree.Element) -> objects.TileSet:
     return tileset
 
 
-def _get_tile_sets(
-    map_element: ElementTree.Element, parent_dir: Path
-) -> objects.TileSetDict:
+def _get_tile_sets(map_element: etree.Element, parent_dir: Path) -> objects.TileSetDict:
     """Get tile sets.
 
     Args:
-        map_element (ElementTree.Element): Element to be parsed.
-        parent_dir (Path): Directory that TMX is in.
+        map_element: Element to be parsed.
+        parent_dir: Directory that TMX is in.
 
     Returns:
         objects.TileSetDict: Dict of tile sets in the TMX by first_gid
@@ -880,13 +850,13 @@ def parse_tile_map(tmx_file: Union[str, Path]) -> objects.TileMap:
     """Parse tile map.
 
     Args:
-        tmx_file (Union[str, Path]): TMX file to be parsed.
+        tmx_file: TMX file to be parsed.
 
     Returns:
         objects.TileMap: TileMap object generated from the TMX file provided.
     """
     # setting up XML parsing
-    map_tree = ElementTree.parse(str(tmx_file))
+    map_tree = etree.parse(str(tmx_file))
     map_element = map_tree.getroot()
 
     # positional arguments for TileMap
