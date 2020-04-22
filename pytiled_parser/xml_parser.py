@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import pytiled_parser.objects as objects
+import pytiled_parser.typing_helpers as TH
 from pytiled_parser.utilities import parse_color
 
 
@@ -182,32 +183,17 @@ def _parse_layer(
     Returns:
         FIXME
     """
-    if "id" in layer_element.attrib:
-        id_ = int(layer_element.attrib["id"])
-    else:
-        id_ = None
+    id_ = int(layer_element.attrib["id"])
 
-    if "name" in layer_element.attrib:
-        name = layer_element.attrib["name"]
-    else:
-        name = None
+    name = layer_element.attrib["name"]
 
     offset: Optional[objects.OrderedPair]
-    offset_x_attrib = layer_element.attrib.get("offsetx")
-    offset_y_attrib = layer_element.attrib.get("offsety")
-    # If any offset is present, we need to return an OrderedPair
-    # Unknown if one of the offsets could be absent.
-    if any([offset_x_attrib, offset_y_attrib]):
-        if offset_x_attrib:
-            offset_x = float(offset_x_attrib)
-        else:
-            offset_x = 0.0
-        if offset_y_attrib:
-            offset_y = float(offset_y_attrib)
-        else:
-            offset_y = 0.0
-
-        offset = objects.OrderedPair(offset_x, offset_y)
+    offset_x = layer_element.attrib.get("offsetx")
+    offset_y = layer_element.attrib.get("offsety")
+    if offset_x and offset_y:
+        assert TH.is_float(offset_x)
+        assert TH.is_float(offset_y)
+        offset = objects.OrderedPair(float(offset_x), float(offset_y))
     else:
         offset = None
 
@@ -247,10 +233,8 @@ def _parse_tile_layer(element: etree.Element,) -> objects.TileLayer:
     size = objects.Size(width, height)
 
     data_element = element.find("./data")
-    if data_element is not None:
-        data: objects.LayerData = _parse_data(data_element, width)
-    else:
-        raise ValueError(f"{element} has no child data element.")
+    assert data_element is not None
+    layer_data: objects.LayerData = _parse_data(data_element, width)
 
     return objects.TileLayer(
         id_=id_,
@@ -259,12 +243,14 @@ def _parse_tile_layer(element: etree.Element,) -> objects.TileLayer:
         opacity=opacity,
         properties=properties,
         size=size,
-        data=data,
+        layer_data=layer_data,
     )
 
 
-def _parse_objects(object_elements: List[etree.Element]) -> List[objects.TiledObject]:
-    """Parses objects found in the 'objectgroup' element.
+def _parse_tiled_objects(
+    object_elements: List[etree.Element],
+) -> List[objects.TiledObject]:
+    """Parses objects found in a 'objectgroup' element.
 
     Args:
         object_elements: List of object elements to be parsed.
@@ -288,16 +274,12 @@ def _parse_objects(object_elements: List[etree.Element]) -> List[objects.TiledOb
             tiled_object.gid = None
 
         try:
+            # If any dimension is provided, they both will be
             width = float(object_element.attrib["width"])
-        except KeyError:
-            width = 0.0
-
-        try:
             height = float(object_element.attrib["height"])
+            tiled_object.size = objects.Size(width, height)
         except KeyError:
-            height = 0.0
-
-        tiled_object.size = objects.Size(width, height)
+            pass
 
         try:
             tiled_object.opacity = float(object_element.attrib["opacity"])
@@ -331,6 +313,8 @@ def _parse_objects(object_elements: List[etree.Element]) -> List[objects.TiledOb
 def _parse_object_layer(element: etree.Element,) -> objects.ObjectLayer:
     """Parse the objectgroup element given.
 
+    See: https://doc.mapeditor.org/en/stable/reference/tmx-map-format/#objectgroup
+
     Args:
         element: Element to be parsed.
 
@@ -338,8 +322,6 @@ def _parse_object_layer(element: etree.Element,) -> objects.ObjectLayer:
         ObjectLayer: The object layer object.
     """
     id_, name, offset, opacity, properties = _parse_layer(element)
-
-    tiled_objects = _parse_objects(element.findall("./object"))
 
     color = None
     try:
@@ -353,15 +335,17 @@ def _parse_object_layer(element: etree.Element,) -> objects.ObjectLayer:
     except KeyError:
         pass
 
+    tiled_objects = _parse_tiled_objects(element.findall("./object"))
+
     return objects.ObjectLayer(
         id_=id_,
         name=name,
         offset=offset,
         opacity=opacity,
         properties=properties,
-        tiled_objects=tiled_objects,
         color=color,
         draw_order=draw_order,
+        tiled_objects=tiled_objects,
     )
 
 
@@ -397,8 +381,7 @@ def _get_layer_parser(
         'group' for a layer group. If anything else is passed, returns None.
 
     Args:
-        layer_tag: Specifies the layer type to be parsed based on the element
-            tag.
+        layer_tag: Specifies the layer type to be parsed based on the element tag.
 
     Returns:
         Callable: the function to be used to parse the layer.
@@ -600,7 +583,8 @@ def _parse_tiles(tile_element_list: List[etree.Element]) -> Dict[int, objects.Ti
                 if my_object is None:
                     if "template" in object.attrib:
                         print(
-                            "Warning, this .tmx file is using an unsupported 'template' attribute. Ignoring."
+                            "Warning, this .tmx file is using an unsupported"
+                            "'template' attribute. Ignoring."
                         )
                         continue
 
@@ -876,7 +860,7 @@ def parse_tile_map(tmx_file: Union[str, Path]) -> objects.TileMap:
     tile_size = objects.Size(tile_width, tile_height)
 
     infinite_attribute = map_element.attrib["infinite"]
-    infinite = bool(infinite_attribute == "true")
+    infinite = bool(infinite_attribute == "1")
 
     if "nextlayerid" in map_element.attrib:
         next_layer_id = int(map_element.attrib["nextlayerid"])

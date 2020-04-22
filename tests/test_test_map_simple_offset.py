@@ -1,7 +1,6 @@
+"""test test_map_simple_offset.tmx"""
 import os
 from pathlib import Path
-
-import pytest
 
 import pytiled_parser
 
@@ -14,13 +13,13 @@ def test_map_simple():
     TMX with a very simple spritesheet tile set and some properties.
     """
 
-    test_map = pytiled_parser.parse_tile_map(TEST_DATA / "test_map_simple.tmx")
+    test_map = pytiled_parser.parse_tile_map(TEST_DATA / "test_map_simple_offset.tmx")
 
     # map
     # unsure how to get paths to compare propperly
     assert test_map.parent_dir == TEST_DATA
     assert test_map.version == "1.2"
-    assert test_map.tiled_version == "1.2.3"
+    assert test_map.tiled_version == "1.3.1"
     assert test_map.orientation == "orthogonal"
     assert test_map.render_order == "right-down"
     assert test_map.map_size == (8, 6)
@@ -39,7 +38,6 @@ def test_map_simple():
         "bool property - false": False,
         "bool property - true": True,
         "color property": "#ff49fcff",
-        "file property": Path("/var/log/syslog"),
         "float property": 1.23456789,
         "int property": 13,
         "string property": "Hello, World!!",
@@ -75,24 +73,9 @@ def test_map_simple():
     ]
     assert test_map.layers[0].id_ == 1
     assert test_map.layers[0].name == "Tile Layer 1"
-    assert test_map.layers[0].offset == None
+    assert test_map.layers[0].offset == pytiled_parser.objects.OrderedPair(
+        x=16.0, y=-16.42
+    )
     assert test_map.layers[0].opacity == None
     assert test_map.layers[0].properties == None
     assert test_map.layers[0].size == (8, 6)
-
-
-@pytest.mark.parametrize(
-    "test_input,expected",
-    [
-        ("#001122", (0x00, 0x11, 0x22, 0xFF)),
-        ("001122", (0x00, 0x11, 0x22, 0xFF)),
-        ("#FF001122", (0x00, 0x11, 0x22, 0xFF)),
-        ("FF001122", (0x00, 0x11, 0x22, 0xFF)),
-        ("FF001122", (0x00, 0x11, 0x22, 0xFF)),
-    ],
-)
-def test_color_parsing(test_input, expected):
-    """
-    Tiled has a few different types of color representations.
-    """
-    assert pytiled_parser.utilities.parse_color(test_input) == expected
