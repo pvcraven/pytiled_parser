@@ -5,6 +5,7 @@ import functools
 import gzip
 import re
 import xml.etree.ElementTree as etree
+import importlib
 import zlib
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple, Union
@@ -37,6 +38,19 @@ def _decode_base64_data(
         unzipped_data = zlib.decompress(unencoded_data)
     elif compression == "gzip":
         unzipped_data = gzip.decompress(unencoded_data)
+    elif compression == "zstd":
+        modulename = 'zstandard'
+        my_loader = importlib.find_loader(modulename)
+        found = my_loader is not None
+        if not found:
+            raise ValueError("Can't load 'zstd' compressed map without the 'zstandard' "
+                             "library available. Either install 'zstandard' or go to "
+                             "Map Properties and change Tile Layer Format to "
+                             "Base64, Base64 gzip, or Base64.")
+        else:
+            import zstandard
+            dctx = zstandard.ZstdDecompressor()
+            unzipped_data = dctx.decompress(unencoded_data)
     elif compression is None:
         unzipped_data = unencoded_data
     else:
